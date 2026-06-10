@@ -199,6 +199,11 @@ function saveText(value) {
   }
 }
 
+function safeFilenamePart(value, fallback) {
+  const cleaned = String(value ?? '').trim().replace(/[\\/:*?"<>|]/g, '_')
+  return cleaned || fallback
+}
+
 const fontOptions = [
   { id: 'system', name: '標準', family: '"Yu Gothic", "Hiragino Sans", "Inter", sans-serif' },
   { id: 'zen-maru', name: 'Zen 丸ゴ', family: '"Zen Maru Gothic", "Yu Gothic", sans-serif' },
@@ -419,6 +424,13 @@ function lightenColor(color, amount = 0) {
   if (!parts) return color
   const mix = (value) => Math.round(value + (255 - value) * safeAmount)
   return `rgba(${mix(parts.r)}, ${mix(parts.g)}, ${mix(parts.b)}, ${parts.a})`
+}
+
+function colorToHexInput(color, fallback = '#ffffff') {
+  const parts = parseColorParts(color)
+  if (!parts) return fallback
+  const toHex = (value) => Math.max(0, Math.min(255, Math.round(value))).toString(16).padStart(2, '0')
+  return `#${toHex(parts.r)}${toHex(parts.g)}${toHex(parts.b)}`
 }
 
 function getLightenedPalette(palette, amount = 0) {
@@ -1192,6 +1204,7 @@ function App() {
   const canvasRef = useRef(null)
   const fileRef = useRef(null)
   const activePointersRef = useRef(new Map())
+  const historyDraftRef = useRef(new Set())
 
   const template = useMemo(
     () => templates.find((item) => item.id === templateId) ?? templates[0],
@@ -1242,6 +1255,7 @@ function App() {
     setSelectedLayerId(snapshot.selectedLayerId)
     setSettings(cloneSettingsSnapshot(snapshot.settings))
     activePointersRef.current.clear()
+    historyDraftRef.current.clear()
     setInteraction(null)
   }
 
@@ -1251,6 +1265,16 @@ function App() {
       past: [...current.past, snapshot].slice(-maxHistoryLength),
       future: [],
     }))
+  }
+
+  function beginDraftHistory(key) {
+    if (historyDraftRef.current.has(key)) return
+    historyDraftRef.current.add(key)
+    pushHistory()
+  }
+
+  function endDraftHistory(key) {
+    historyDraftRef.current.delete(key)
   }
 
   function undo() {
@@ -1314,8 +1338,8 @@ function App() {
     setSettings((current) => ({ ...current, [key]: value }))
   }
 
-  function updateGrid(patch) {
-    pushHistory()
+  function updateGrid(patch, recordHistory = true) {
+    if (recordHistory) pushHistory()
     setSettings((current) => ({ ...current, grid: { ...current.grid, ...patch } }))
   }
 
@@ -1394,9 +1418,9 @@ function App() {
     )
   }
 
-  function updateSelectedLayerEffects(patch) {
+  function updateSelectedLayerEffects(patch, recordHistory = true) {
     if (!selectedLayerId) return
-    pushHistory()
+    if (recordHistory) pushHistory()
     setLayersState((current) =>
       current.map((layer) =>
         layer.id === selectedLayerId
@@ -1473,8 +1497,10 @@ function App() {
     await document.fonts?.ready
     drawCanvas(canvas, template, palette, format, layersState, selectedLayerId, settings, false)
     const link = document.createElement('a')
-    const safeTitle = (settings.title.trim() || 'work').replace(/[\\/:*?"<>|]/g, '_')
-    link.download = `${safeTitle}_${template.id}.png`
+    const topLayerName = safeFilenamePart(layersState[layersState.length - 1]?.name, '')
+    const safeTitle = safeFilenamePart(settings.title, 'work')
+    const baseName = `${safeTitle}_${template.id}`
+    link.download = `${topLayerName ? `${topLayerName}_${baseName}` : baseName}.png`
     link.href = canvas.toDataURL('image/png')
     link.click()
     drawCanvas(canvas, template, palette, format, layersState, selectedLayerId, settings, true)
@@ -1897,12 +1923,17 @@ function App() {
                     <div className="color-row">
                       <input
                         type="color"
-                        value={(selectedLayer.effects?.stickerColor ?? defaultLayerEffects.stickerColor).startsWith('#') ? selectedLayer.effects?.stickerColor ?? defaultLayerEffects.stickerColor : '#ffffff'}
-                        onChange={(event) => updateSelectedLayerEffects({ stickerColor: event.target.value })}
+                        value={colorToHexInput(selectedLayer.effects?.stickerColor ?? defaultLayerEffects.stickerColor, '#ffffff')}
+                        onPointerDown={() => beginDraftHistory('stickerColor')}
+                        onFocus={() => beginDraftHistory('stickerColor')}
+                        onBlur={() => endDraftHistory('stickerColor')}
+                        onChange={(event) => updateSelectedLayerEffects({ stickerColor: event.target.value }, false)}
                       />
                       <input
                         value={selectedLayer.effects?.stickerColor ?? defaultLayerEffects.stickerColor}
-                        onChange={(event) => updateSelectedLayerEffects({ stickerColor: event.target.value })}
+                        onFocus={() => beginDraftHistory('stickerColor')}
+                        onBlur={() => endDraftHistory('stickerColor')}
+                        onChange={(event) => updateSelectedLayerEffects({ stickerColor: event.target.value }, false)}
                       />
                     </div>
                   </label>
@@ -1933,12 +1964,17 @@ function App() {
                     <div className="color-row">
                       <input
                         type="color"
-                        value={(selectedLayer.effects?.borderColor ?? defaultLayerEffects.borderColor).startsWith('#') ? selectedLayer.effects?.borderColor ?? defaultLayerEffects.borderColor : '#ffffff'}
-                        onChange={(event) => updateSelectedLayerEffects({ borderColor: event.target.value })}
+                        value={colorToHexInput(selectedLayer.effects?.borderColor ?? defaultLayerEffects.borderColor, '#ffffff')}
+                        onPointerDown={() => beginDraftHistory('borderColor')}
+                        onFocus={() => beginDraftHistory('borderColor')}
+                        onBlur={() => endDraftHistory('borderColor')}
+                        onChange={(event) => updateSelectedLayerEffects({ borderColor: event.target.value }, false)}
                       />
                       <input
                         value={selectedLayer.effects?.borderColor ?? defaultLayerEffects.borderColor}
-                        onChange={(event) => updateSelectedLayerEffects({ borderColor: event.target.value })}
+                        onFocus={() => beginDraftHistory('borderColor')}
+                        onBlur={() => endDraftHistory('borderColor')}
+                        onChange={(event) => updateSelectedLayerEffects({ borderColor: event.target.value }, false)}
                       />
                     </div>
                   </label>
@@ -1955,12 +1991,17 @@ function App() {
                     <div className="color-row">
                       <input
                         type="color"
-                        value={(selectedLayer.effects?.shadowColor ?? defaultLayerEffects.shadowColor).startsWith('#') ? selectedLayer.effects?.shadowColor ?? defaultLayerEffects.shadowColor : '#8aa0bc'}
-                        onChange={(event) => updateSelectedLayerEffects({ shadowColor: event.target.value })}
+                        value={colorToHexInput(selectedLayer.effects?.shadowColor ?? defaultLayerEffects.shadowColor, '#8aa0bc')}
+                        onPointerDown={() => beginDraftHistory('shadowColor')}
+                        onFocus={() => beginDraftHistory('shadowColor')}
+                        onBlur={() => endDraftHistory('shadowColor')}
+                        onChange={(event) => updateSelectedLayerEffects({ shadowColor: event.target.value }, false)}
                       />
                       <input
                         value={selectedLayer.effects?.shadowColor ?? defaultLayerEffects.shadowColor}
-                        onChange={(event) => updateSelectedLayerEffects({ shadowColor: event.target.value })}
+                        onFocus={() => beginDraftHistory('shadowColor')}
+                        onBlur={() => endDraftHistory('shadowColor')}
+                        onChange={(event) => updateSelectedLayerEffects({ shadowColor: event.target.value }, false)}
                       />
                     </div>
                   </label>
@@ -2112,12 +2153,17 @@ function App() {
                 <div className="color-row">
                   <input
                     type="color"
-                    value={settings.grid.color.startsWith('#') ? settings.grid.color : '#9abede'}
-                    onChange={(event) => updateGrid({ color: event.target.value })}
+                    value={colorToHexInput(settings.grid.color, '#9abede')}
+                    onPointerDown={() => beginDraftHistory('gridColor')}
+                    onFocus={() => beginDraftHistory('gridColor')}
+                    onBlur={() => endDraftHistory('gridColor')}
+                    onChange={(event) => updateGrid({ color: event.target.value }, false)}
                   />
                   <input
                     value={settings.grid.color}
-                    onChange={(event) => updateGrid({ color: event.target.value })}
+                    onFocus={() => beginDraftHistory('gridColor')}
+                    onBlur={() => endDraftHistory('gridColor')}
+                    onChange={(event) => updateGrid({ color: event.target.value }, false)}
                   />
                 </div>
               </label>
