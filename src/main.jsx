@@ -8,10 +8,12 @@ import {
   Layers,
   Move,
   RefreshCcw,
+  Redo2,
   RotateCcw,
   Sparkles,
   Trash2,
   Type,
+  Undo2,
   Eye,
   EyeOff,
 } from 'lucide-react'
@@ -106,6 +108,9 @@ const templates = [
 
 const handleNames = ['nw', 'ne', 'se', 'sw']
 const minLayerSize = 40
+const deleteControlPadding = 10
+const maxHistoryLength = 80
+const textStorageKey = 'works-layout-tool-text'
 const defaultLayerEffects = {
   stickerColor: '#ffffff',
   stickerOffset: 18,
@@ -137,6 +142,62 @@ const patternModes = [
   ['stripe-h', '横縞'],
   ['stripe-diagonal', '斜線'],
 ]
+
+function getDefaultGrid(template, palette) {
+  const isSolidPastel = Boolean(template?.solidPastel)
+  const isPastel = template?.id === 'pastel-grid' || template?.pastelWave
+  return {
+    mode: isSolidPastel ? 'dotted' : isPastel ? 'wavy' : 'none',
+    color: palette?.grid ?? 'rgba(154, 190, 222, 0.34)',
+    width: isSolidPastel ? 5 : 2,
+    spacing: isSolidPastel ? 150 : 108,
+    opacity: 1,
+    wobble: isSolidPastel ? 0 : isPastel ? 0.8 : 0,
+    rotation: 0,
+  }
+}
+
+function getDefaultDecoration(template) {
+  const isPastel = template?.id === 'pastel-grid' || Boolean(template?.pastelWave)
+  return {
+    enabled: isPastel,
+    mode: 'cross',
+    opacity: template?.solidPastel ? 1 : 0.62,
+    scale: 1,
+    sizeVariance: 0.35,
+    seed: 1,
+  }
+}
+
+function loadSavedText() {
+  try {
+    const raw = window.localStorage.getItem(textStorageKey)
+    if (!raw) return {}
+    const parsed = JSON.parse(raw)
+    return {
+      title: typeof parsed.title === 'string' ? parsed.title : undefined,
+      meta: typeof parsed.meta === 'string' ? parsed.meta : undefined,
+      tag: typeof parsed.tag === 'string' ? parsed.tag : undefined,
+    }
+  } catch {
+    return {}
+  }
+}
+
+function saveText(value) {
+  try {
+    window.localStorage.setItem(
+      textStorageKey,
+      JSON.stringify({
+        title: value.title,
+        meta: value.meta,
+        tag: value.tag,
+      }),
+    )
+  } catch {
+    // localStorage may be unavailable in private or restricted browser modes.
+  }
+}
 
 const fontOptions = [
   { id: 'system', name: '標準', family: '"Yu Gothic", "Hiragino Sans", "Inter", sans-serif' },
@@ -325,6 +386,49 @@ function drawDiamond(ctx, x, y, size, color, rotation = 0) {
   ctx.closePath()
   ctx.fill()
   ctx.restore()
+}
+
+function parseColorParts(color) {
+  if (typeof color !== 'string') return null
+  const trimmed = color.trim()
+  const hex = trimmed.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i)
+  if (hex) {
+    const value = hex[1].length === 3
+      ? hex[1].split('').map((part) => part + part).join('')
+      : hex[1]
+    return {
+      r: parseInt(value.slice(0, 2), 16),
+      g: parseInt(value.slice(2, 4), 16),
+      b: parseInt(value.slice(4, 6), 16),
+      a: 1,
+    }
+  }
+  const rgba = trimmed.match(/^rgba?\(([^)]+)\)$/i)
+  if (!rgba) return null
+  const parts = rgba[1].split(',').map((part) => part.trim())
+  const [r, g, b] = parts.slice(0, 3).map(Number)
+  const a = parts[3] === undefined ? 1 : Number(parts[3])
+  if ([r, g, b, a].some((value) => Number.isNaN(value))) return null
+  return { r, g, b, a }
+}
+
+function lightenColor(color, amount = 0) {
+  const safeAmount = Math.max(0, Math.min(1, Number(amount) || 0))
+  if (safeAmount <= 0) return color
+  const parts = parseColorParts(color)
+  if (!parts) return color
+  const mix = (value) => Math.round(value + (255 - value) * safeAmount)
+  return `rgba(${mix(parts.r)}, ${mix(parts.g)}, ${mix(parts.b)}, ${parts.a})`
+}
+
+function getLightenedPalette(palette, amount = 0) {
+  return {
+    ...palette,
+    background: lightenColor(palette.background, amount),
+    gradientFrom: lightenColor(palette.gradientFrom, amount),
+    gradientTo: lightenColor(palette.gradientTo, amount),
+    wave: lightenColor(palette.wave, amount),
+  }
 }
 
 function drawFluffyCloud(ctx, x, y, size, color, rotation = 0) {
@@ -706,6 +810,20 @@ function getHandles(layer) {
   }
 }
 
+function getDeleteControl(layer, format) {
+  const size = Math.max(44, Math.min(72, format.width / 24))
+  const radius = size / 2
+  const x = layer.x + layer.width / 2
+  const preferredY = layer.y - radius - deleteControlPadding
+  const y = Math.max(radius + 6, preferredY)
+  return { x, y, radius, size }
+}
+
+function hitDeleteControl(layer, format, point) {
+  const control = getDeleteControl(layer, format)
+  return Math.hypot(point.x - control.x, point.y - control.y) <= control.radius
+}
+
 function getHandleAt(layer, point, size) {
   const handles = getHandles(layer)
   return handleNames.find((name) => {
@@ -870,20 +988,21 @@ function drawLayer(ctx, layer) {
 function drawCanvas(canvas, template, palette, format, layers, selectedLayerId, settings, showControls = true) {
   const ctx = canvas.getContext('2d')
   const { width, height } = getCanvasSize(format)
+  const displayPalette = getLightenedPalette(palette, settings.backgroundLightness)
   canvas.width = width
   canvas.height = height
 
   if (isPastelWaveTemplate(template)) {
-    drawPastelWaveBase(ctx, width, height, palette, template.solidPastel)
+    drawPastelWaveBase(ctx, width, height, displayPalette, template.solidPastel)
   } else if (template.id === 'soft-poster') {
     const gradient = ctx.createLinearGradient(0, 0, width, height)
-    gradient.addColorStop(0, palette.gradientFrom)
-    gradient.addColorStop(0.52, palette.background)
-    gradient.addColorStop(1, palette.gradientTo)
+    gradient.addColorStop(0, displayPalette.gradientFrom)
+    gradient.addColorStop(0.52, displayPalette.background)
+    gradient.addColorStop(1, displayPalette.gradientTo)
     ctx.fillStyle = gradient
     ctx.fillRect(0, 0, width, height)
   } else {
-    ctx.fillStyle = palette.background
+    ctx.fillStyle = displayPalette.background
     ctx.fillRect(0, 0, width, height)
   }
 
@@ -908,11 +1027,13 @@ function drawCanvas(canvas, template, palette, format, layers, selectedLayerId, 
     ctx.restore()
   }
 
-  layers.forEach((layer) => {
-    drawLayer(ctx, layer)
-  })
+  if (!settings.layersAboveFrame) {
+    layers.forEach((layer) => {
+      drawLayer(ctx, layer)
+    })
+  }
 
-  const frame = getFrame(template, palette, format)
+  const frame = getFrame(template, displayPalette, format)
   ctx.save()
   if (frame.lineWidth > 0) {
     ctx.strokeStyle = frame.stroke
@@ -931,10 +1052,16 @@ function drawCanvas(canvas, template, palette, format, layers, selectedLayerId, 
   ctx.restore()
 
   if (isPastelWaveTemplate(template) && !template.solidPastel) {
-    drawPastelWaveFrame(ctx, width, height, palette)
+    drawPastelWaveFrame(ctx, width, height, displayPalette)
   }
   if (template.solidPastel) {
     drawSolidPastelLines(ctx, width, height)
+  }
+
+  if (settings.layersAboveFrame) {
+    layers.forEach((layer) => {
+      drawLayer(ctx, layer)
+    })
   }
 
   if (settings.showText) {
@@ -1015,11 +1142,30 @@ function drawCanvas(canvas, template, palette, format, layers, selectedLayerId, 
       ctx.fillRect(handle.x - handleSize / 2, handle.y - handleSize / 2, handleSize, handleSize)
       ctx.strokeRect(handle.x - handleSize / 2, handle.y - handleSize / 2, handleSize, handleSize)
     })
+    const deleteControl = getDeleteControl(selectedLayer, { width, height })
+    const iconSize = deleteControl.radius * 0.5
+    ctx.fillStyle = '#1f2428'
+    ctx.strokeStyle = '#ffffff'
+    ctx.lineWidth = Math.max(3, width / 360)
+    ctx.beginPath()
+    ctx.arc(deleteControl.x, deleteControl.y, deleteControl.radius, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.stroke()
+    ctx.strokeStyle = '#ffffff'
+    ctx.lineWidth = Math.max(4, width / 280)
+    ctx.lineCap = 'round'
+    ctx.beginPath()
+    ctx.moveTo(deleteControl.x - iconSize, deleteControl.y - iconSize)
+    ctx.lineTo(deleteControl.x + iconSize, deleteControl.y + iconSize)
+    ctx.moveTo(deleteControl.x + iconSize, deleteControl.y - iconSize)
+    ctx.lineTo(deleteControl.x - iconSize, deleteControl.y + iconSize)
+    ctx.stroke()
     ctx.restore()
   }
 }
 
 function App() {
+  const savedText = useMemo(() => loadSavedText(), [])
   const [formatId, setFormatId] = useState(formatPresets[0].id)
   const [templateId, setTemplateId] = useState(templates[0].id)
   const [paletteIdByTemplate, setPaletteIdByTemplate] = useState(() =>
@@ -1029,34 +1175,23 @@ function App() {
   const [selectedLayerId, setSelectedLayerId] = useState(null)
   const [activeInspectorTab, setActiveInspectorTab] = useState('layers')
   const [fontReadyVersion, setFontReadyVersion] = useState(0)
+  const [history, setHistory] = useState({ past: [], future: [] })
   const [settings, setSettings] = useState({
-    title: 'Sample Work',
-    meta: 'Illustration / Client work',
-    tag: '@artistname',
+    title: savedText.title ?? 'Sample Work',
+    meta: savedText.meta ?? 'Illustration / Client work',
+    tag: savedText.tag ?? '@artistname',
     showText: true,
     fontFamily: 'system',
     textPosition: 'top',
-    grid: {
-      mode: 'none',
-      color: 'rgba(154, 190, 222, 0.34)',
-      width: 2,
-      spacing: 108,
-      opacity: 1,
-      wobble: 0,
-      rotation: 0,
-    },
-    decoration: {
-      enabled: false,
-      mode: 'cross',
-      opacity: 0.62,
-      scale: 1,
-      sizeVariance: 0.35,
-      seed: 1,
-    },
+    layersAboveFrame: false,
+    backgroundLightness: 0,
+    grid: getDefaultGrid(templates[0], templates[0].palettes[0]),
+    decoration: getDefaultDecoration(templates[0]),
   })
   const [interaction, setInteraction] = useState(null)
   const canvasRef = useRef(null)
   const fileRef = useRef(null)
+  const activePointersRef = useRef(new Map())
 
   const template = useMemo(
     () => templates.find((item) => item.id === templateId) ?? templates[0],
@@ -1073,6 +1208,73 @@ function App() {
 
   const selectedLayer = layersState.find((layer) => layer.id === selectedLayerId) ?? null
 
+  function cloneLayers(layers) {
+    return layers.map((layer) => ({
+      ...layer,
+      effects: { ...defaultLayerEffects, ...(layer.effects ?? {}) },
+    }))
+  }
+
+  function cloneSettingsSnapshot(value) {
+    return {
+      ...value,
+      grid: { ...value.grid },
+      decoration: { ...value.decoration },
+    }
+  }
+
+  function createHistorySnapshot() {
+    return {
+      formatId,
+      templateId,
+      paletteIdByTemplate: { ...paletteIdByTemplate },
+      layersState: cloneLayers(layersState),
+      selectedLayerId,
+      settings: cloneSettingsSnapshot(settings),
+    }
+  }
+
+  function restoreHistorySnapshot(snapshot) {
+    setFormatId(snapshot.formatId)
+    setTemplateId(snapshot.templateId)
+    setPaletteIdByTemplate({ ...snapshot.paletteIdByTemplate })
+    setLayersState(cloneLayers(snapshot.layersState))
+    setSelectedLayerId(snapshot.selectedLayerId)
+    setSettings(cloneSettingsSnapshot(snapshot.settings))
+    activePointersRef.current.clear()
+    setInteraction(null)
+  }
+
+  function pushHistory() {
+    const snapshot = createHistorySnapshot()
+    setHistory((current) => ({
+      past: [...current.past, snapshot].slice(-maxHistoryLength),
+      future: [],
+    }))
+  }
+
+  function undo() {
+    if (history.past.length === 0) return
+    const previous = history.past[history.past.length - 1]
+    const currentSnapshot = createHistorySnapshot()
+    restoreHistorySnapshot(previous)
+    setHistory((current) => ({
+      past: current.past.slice(0, -1),
+      future: [currentSnapshot, ...current.future].slice(0, maxHistoryLength),
+    }))
+  }
+
+  function redo() {
+    if (history.future.length === 0) return
+    const next = history.future[0]
+    const currentSnapshot = createHistorySnapshot()
+    restoreHistorySnapshot(next)
+    setHistory((current) => ({
+      past: [...current.past, currentSnapshot].slice(-maxHistoryLength),
+      future: current.future.slice(1),
+    }))
+  }
+
   useEffect(() => {
     if (!document.fonts?.ready) return
     document.fonts.ready.then(() => setFontReadyVersion((current) => current + 1))
@@ -1083,12 +1285,48 @@ function App() {
     drawCanvas(canvasRef.current, template, palette, format, layersState, selectedLayerId, settings, true)
   }, [template, palette, format, layersState, selectedLayerId, settings, fontReadyVersion])
 
+  useEffect(() => {
+    saveText(settings)
+  }, [settings.title, settings.meta, settings.tag])
+
+  useEffect(() => {
+    function onKeyDown(event) {
+      if (event.isComposing || (!event.ctrlKey && !event.metaKey)) return
+      const key = event.key.toLowerCase()
+      if (key === 'z' && event.shiftKey) {
+        event.preventDefault()
+        redo()
+      } else if (key === 'z') {
+        event.preventDefault()
+        undo()
+      } else if (key === 'y') {
+        event.preventDefault()
+        redo()
+      }
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [history, formatId, templateId, paletteIdByTemplate, layersState, selectedLayerId, settings])
+
   function updateText(key, value) {
+    pushHistory()
     setSettings((current) => ({ ...current, [key]: value }))
   }
 
   function updateGrid(patch) {
+    pushHistory()
     setSettings((current) => ({ ...current, grid: { ...current.grid, ...patch } }))
+  }
+
+  function updateBackgroundLightness(value) {
+    pushHistory()
+    setSettings((current) => ({ ...current, backgroundLightness: value }))
+  }
+
+  function updateLayersAboveFrame(value) {
+    pushHistory()
+    setSettings((current) => ({ ...current, layersAboveFrame: value }))
   }
 
   function applyGridPreset(mode) {
@@ -1096,12 +1334,14 @@ function App() {
   }
 
   function updateDecoration(patch) {
+    pushHistory()
     setSettings((current) => ({ ...current, decoration: { ...current.decoration, ...patch } }))
   }
 
   function changePalette(nextPaletteId) {
     const nextPalette = template.palettes.find((item) => item.id === nextPaletteId)
     if (!nextPalette) return
+    pushHistory()
     setPaletteIdByTemplate((current) => ({ ...current, [template.id]: nextPalette.id }))
     setSettings((current) => ({
       ...current,
@@ -1116,32 +1356,20 @@ function App() {
     const nextTemplate = templates.find((item) => item.id === nextTemplateId)
     const nextPaletteId = paletteIdByTemplate[nextTemplateId] ?? nextTemplate?.palettes[0]?.id
     const nextPalette = nextTemplate?.palettes.find((item) => item.id === nextPaletteId) ?? nextTemplate?.palettes[0]
-    const isSolidPastel = Boolean(nextTemplate?.solidPastel)
-    const isPastel = nextTemplate?.id === 'pastel-grid' || nextTemplate?.pastelWave
+    pushHistory()
     setTemplateId(nextTemplateId)
     setSettings((current) => ({
       ...current,
-      grid: {
-        ...current.grid,
-        mode: isSolidPastel ? 'dotted' : isPastel ? 'wavy' : 'none',
-        width: isSolidPastel ? 5 : current.grid.width,
-        spacing: isSolidPastel ? 150 : current.grid.spacing,
-        opacity: isSolidPastel ? 1 : current.grid.opacity,
-        wobble: isSolidPastel ? 0 : isPastel ? 0.8 : 0,
-        rotation: isSolidPastel ? 0 : current.grid.rotation,
-        color: nextPalette?.grid ?? current.grid.color,
-      },
-      decoration: {
-        ...current.decoration,
-        enabled: isPastel ? true : current.decoration.enabled,
-        opacity: isSolidPastel ? 1 : current.decoration.opacity,
-      },
+      backgroundLightness: 0,
+      grid: getDefaultGrid(nextTemplate, nextPalette),
+      decoration: getDefaultDecoration(nextTemplate),
     }))
   }
 
   function changeFormat(nextFormatId) {
     const nextFormat = formatPresets.find((item) => item.id === nextFormatId)
     if (!nextFormat || nextFormat.id === formatId) return
+    pushHistory()
     const scaleX = nextFormat.width / format.width
     const scaleY = nextFormat.height / format.height
     setLayersState((current) =>
@@ -1160,6 +1388,7 @@ function App() {
 
   function updateSelectedLayer(patch) {
     if (!selectedLayerId) return
+    pushHistory()
     setLayersState((current) =>
       current.map((layer) => (layer.id === selectedLayerId ? { ...layer, ...patch } : layer)),
     )
@@ -1167,6 +1396,7 @@ function App() {
 
   function updateSelectedLayerEffects(patch) {
     if (!selectedLayerId) return
+    pushHistory()
     setLayersState((current) =>
       current.map((layer) =>
         layer.id === selectedLayerId
@@ -1178,6 +1408,7 @@ function App() {
 
   function applySelectedEffectsToAllLayers() {
     if (!selectedLayer) return
+    pushHistory()
     const effects = { ...defaultLayerEffects, ...(selectedLayer.effects ?? {}) }
     setLayersState((current) => current.map((layer) => ({ ...layer, effects: { ...effects } })))
   }
@@ -1198,6 +1429,7 @@ function App() {
       nextLayers.push(fitLayerToSlot(img, format, file.name.replace(/\.[^.]+$/, '')))
     }
 
+    pushHistory()
     setLayersState((current) => [...current, ...nextLayers])
     setSelectedLayerId(nextLayers[nextLayers.length - 1].id)
   }
@@ -1216,12 +1448,14 @@ function App() {
 
   function deleteSelectedLayer() {
     if (!selectedLayerId) return
+    pushHistory()
     setLayersState((current) => current.filter((layer) => layer.id !== selectedLayerId))
     setSelectedLayerId(null)
   }
 
   function moveSelectedLayer(direction) {
     if (!selectedLayerId) return
+    pushHistory()
     setLayersState((current) => {
       const index = current.findIndex((layer) => layer.id === selectedLayerId)
       const targetIndex = index + direction
@@ -1255,12 +1489,39 @@ function App() {
   }
 
   function onPointerDown(event) {
+    event.preventDefault()
     const point = pointerPosition(event)
+    activePointersRef.current.set(event.pointerId, point)
     const currentSelected = layersState.find((layer) => layer.id === selectedLayerId)
+    if (currentSelected && hitDeleteControl(currentSelected, format, point)) {
+      deleteSelectedLayer()
+      activePointersRef.current.delete(event.pointerId)
+      return
+    }
+
+    if (activePointersRef.current.size >= 2) {
+      const points = Array.from(activePointersRef.current.values()).slice(0, 2)
+      const hit = currentSelected ?? [...layersState].reverse().find((layer) => hitLayer(layer, point))
+      if (hit) {
+        pushHistory()
+        setSelectedLayerId(hit.id)
+        setInteraction({
+          type: 'pinch',
+          layerId: hit.id,
+          startLayer: hit,
+          startDistance: Math.max(1, getDistance(points[0], points[1])),
+          center: getMidpoint(points[0], points[1]),
+        })
+        event.currentTarget.setPointerCapture(event.pointerId)
+      }
+      return
+    }
+
     const handleSize = format.width / 55
     if (currentSelected) {
       const handle = getHandleAt(currentSelected, point, handleSize)
       if (handle) {
+        pushHistory()
         setInteraction({ type: 'resize', layerId: currentSelected.id, handle, startLayer: currentSelected })
         event.currentTarget.setPointerCapture(event.pointerId)
         return
@@ -1269,6 +1530,7 @@ function App() {
 
     const hit = [...layersState].reverse().find((layer) => hitLayer(layer, point))
     if (hit) {
+      pushHistory()
       setSelectedLayerId(hit.id)
       setInteraction({ type: 'move', layerId: hit.id, startPoint: point, startLayer: hit })
       event.currentTarget.setPointerCapture(event.pointerId)
@@ -1278,8 +1540,24 @@ function App() {
   }
 
   function onPointerMove(event) {
-    if (!interaction) return
+    event.preventDefault()
     const point = pointerPosition(event)
+    if (activePointersRef.current.has(event.pointerId)) {
+      activePointersRef.current.set(event.pointerId, point)
+    }
+    if (!interaction) return
+
+    if (interaction.type === 'pinch') {
+      const points = Array.from(activePointersRef.current.values()).slice(0, 2)
+      if (points.length < 2) return
+      const scale = getDistance(points[0], points[1]) / interaction.startDistance
+      setLayersState((current) =>
+        current.map((layer) =>
+          layer.id === interaction.layerId ? scaleLayerFromPoint(interaction.startLayer, interaction.center, scale) : layer,
+        ),
+      )
+      return
+    }
 
     if (interaction.type === 'move') {
       const dx = point.x - interaction.startPoint.x
@@ -1304,8 +1582,11 @@ function App() {
     }
   }
 
-  function onPointerUp() {
-    setInteraction(null)
+  function onPointerUp(event) {
+    activePointersRef.current.delete(event.pointerId)
+    if (activePointersRef.current.size < 2 || interaction?.type !== 'pinch') {
+      setInteraction(null)
+    }
   }
 
   return (
@@ -1424,10 +1705,18 @@ function App() {
             <strong>{template.name}</strong>
             <span>{format.name} / {format.width} x {format.height}px</span>
           </div>
-          <button className="ghost-button" onClick={exportPng}>
-            <Download size={18} />
-            <span className="export-label">PNG書き出し</span>
-          </button>
+          <div className="stage-actions">
+            <button className="history-button" title="元に戻す" onClick={undo} disabled={history.past.length === 0}>
+              <Undo2 size={17} />
+            </button>
+            <button className="history-button" title="やり直す" onClick={redo} disabled={history.future.length === 0}>
+              <Redo2 size={17} />
+            </button>
+            <button className="ghost-button" title="PNG書き出し" onClick={exportPng}>
+              <Download size={18} />
+              <span className="export-label">PNG書き出し</span>
+            </button>
+          </div>
         </div>
         <div className="canvas-frame">
           <canvas
@@ -1437,6 +1726,7 @@ function App() {
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
             onPointerCancel={onPointerUp}
+            onContextMenu={(event) => event.preventDefault()}
           />
         </div>
       </section>
@@ -1585,6 +1875,14 @@ function App() {
                   <Trash2 size={17} />
                 </button>
               </div>
+              <label className="check-row layer-stack-toggle">
+                <input
+                  type="checkbox"
+                  checked={settings.layersAboveFrame}
+                  onChange={(event) => updateLayersAboveFrame(event.target.checked)}
+                />
+                <span>画像を枠線より前に表示</span>
+              </label>
             </section>
 
             <section className="panel">
@@ -1705,69 +2003,94 @@ function App() {
         )}
 
         {activeInspectorTab === 'text' && (
-          <section className="panel">
+          <section className="panel text-panel">
             <div className="section-title">
               <Type size={17} />
               <span>文字</span>
             </div>
-            <button
-              className="secondary-button text-toggle"
-              onClick={() => updateText('showText', !settings.showText)}
-            >
-              {settings.showText ? <EyeOff size={17} /> : <Eye size={17} />}
-              {settings.showText ? '文字を完全非表示' : '文字を表示'}
-            </button>
-            <label>
-              表示位置
-              <div className="segmented text-position-control">
-                {[
-                  ['top', '上'],
-                  ['bottom', '下'],
-                ].map(([position, label]) => (
-                  <button
-                    key={position}
-                    type="button"
-                    className={settings.textPosition === position ? 'active' : ''}
-                    onClick={() => updateText('textPosition', position)}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            </label>
-            <label>
-              フォント
-              <div className="font-grid">
-                {fontOptions.map((font) => (
-                  <button
-                    key={font.id}
-                    type="button"
-                    className={settings.fontFamily === font.id ? 'active' : ''}
-                    style={{ fontFamily: font.family }}
-                    onClick={() => updateText('fontFamily', font.id)}
-                  >
-                    {font.name}
-                  </button>
-                ))}
-              </div>
-            </label>
-            <label>
-              タイトル
-              <input value={settings.title} onChange={(event) => updateText('title', event.target.value)} />
-            </label>
-            <label>
-              補足
-              <input value={settings.meta} onChange={(event) => updateText('meta', event.target.value)} />
-            </label>
-            <label>
-              表記
-              <input value={settings.tag} onChange={(event) => updateText('tag', event.target.value)} />
-            </label>
+            <div className="text-controls-column">
+              <button
+                className="secondary-button text-toggle"
+                onClick={() => updateText('showText', !settings.showText)}
+              >
+                {settings.showText ? <EyeOff size={17} /> : <Eye size={17} />}
+                {settings.showText ? '文字を完全非表示' : '文字を表示'}
+              </button>
+              <label>
+                表示位置
+                <div className="segmented text-position-control">
+                  {[
+                    ['top', '上'],
+                    ['bottom', '下'],
+                  ].map(([position, label]) => (
+                    <button
+                      key={position}
+                      type="button"
+                      className={settings.textPosition === position ? 'active' : ''}
+                      onClick={() => updateText('textPosition', position)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </label>
+              <label>
+                フォント
+                <div className="font-grid">
+                  {fontOptions.map((font) => (
+                    <button
+                      key={font.id}
+                      type="button"
+                      className={settings.fontFamily === font.id ? 'active' : ''}
+                      style={{ fontFamily: font.family }}
+                      onClick={() => updateText('fontFamily', font.id)}
+                    >
+                      {font.name}
+                    </button>
+                  ))}
+                </div>
+              </label>
+            </div>
+            <div className="text-fields-column">
+              <label>
+                タイトル
+                <input value={settings.title} onChange={(event) => updateText('title', event.target.value)} />
+              </label>
+              <label>
+                補足
+                <input value={settings.meta} onChange={(event) => updateText('meta', event.target.value)} />
+              </label>
+              <label>
+                表記
+                <input value={settings.tag} onChange={(event) => updateText('tag', event.target.value)} />
+              </label>
+            </div>
           </section>
         )}
 
         {activeInspectorTab === 'background' && (
           <>
+            <section className="panel">
+              <div className="section-title">
+                <Sparkles size={17} />
+                <span>背景色</span>
+              </div>
+              <label>
+                <span className="range-label">
+                  <span>薄さ</span>
+                  <b>{Math.round((settings.backgroundLightness ?? 0) * 100)}%</b>
+                </span>
+                <input
+                  type="range"
+                  min="0"
+                  max="0.85"
+                  step="0.01"
+                  value={settings.backgroundLightness ?? 0}
+                  onChange={(event) => updateBackgroundLightness(Number(event.target.value))}
+                />
+              </label>
+            </section>
+
             <section className="panel">
               <div className="section-title">
                 <Sparkles size={17} />
@@ -1964,6 +2287,28 @@ function App() {
       <div className="app-credit">Created by MacmazawaRinko</div>
     </main>
   )
+}
+
+function getDistance(a, b) {
+  return Math.hypot(a.x - b.x, a.y - b.y)
+}
+
+function getMidpoint(a, b) {
+  return {
+    x: (a.x + b.x) / 2,
+    y: (a.y + b.y) / 2,
+  }
+}
+
+function scaleLayerFromPoint(layer, center, scale) {
+  const safeScale = Math.max(minLayerSize / Math.min(layer.width, layer.height), scale)
+  return {
+    ...layer,
+    x: center.x + (layer.x - center.x) * safeScale,
+    y: center.y + (layer.y - center.y) * safeScale,
+    width: layer.width * safeScale,
+    height: layer.height * safeScale,
+  }
 }
 
 createRoot(document.getElementById('root')).render(<App />)
