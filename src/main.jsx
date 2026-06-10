@@ -433,6 +433,14 @@ function colorToHexInput(color, fallback = '#ffffff') {
   return `#${toHex(parts.r)}${toHex(parts.g)}${toHex(parts.b)}`
 }
 
+function darkenColor(color, amount = 0.25, alpha = 1) {
+  const parts = parseColorParts(color)
+  if (!parts) return color
+  const safeAmount = Math.max(0, Math.min(1, Number(amount) || 0))
+  const mix = (value) => Math.round(value * (1 - safeAmount))
+  return `rgba(${mix(parts.r)}, ${mix(parts.g)}, ${mix(parts.b)}, ${alpha})`
+}
+
 function getLightenedPalette(palette, amount = 0) {
   return {
     ...palette,
@@ -1093,6 +1101,22 @@ function drawCanvas(canvas, template, palette, format, layers, selectedLayerId, 
     ctx.save()
     ctx.textBaseline = 'top'
     ctx.textAlign = 'left'
+    const useTextStroke = Boolean(template.solidPastel)
+    const strokeTextColor = darkenColor(palette.background, 0.32, 0.46)
+    const strokeTextWidth = Math.max(2, Math.round(5 * scale))
+    const drawReadableText = (text, drawX, drawY) => {
+      if (useTextStroke) {
+        ctx.save()
+        ctx.lineJoin = 'round'
+        ctx.miterLimit = 2
+        ctx.strokeStyle = strokeTextColor
+        ctx.lineWidth = strokeTextWidth
+        ctx.strokeText(text, drawX, drawY)
+        ctx.restore()
+      }
+      ctx.fillText(text, drawX, drawY)
+    }
+
     ctx.fillStyle = palette.text
     ctx.font = `700 ${titleSize}px ${fontFamily}`
     const titleLineHeight = titleSize * 1.2
@@ -1107,21 +1131,21 @@ function drawCanvas(canvas, template, palette, format, layers, selectedLayerId, 
     if (isBottomText) {
       ctx.fillStyle = palette.textMuted
       ctx.font = `500 ${metaSize}px ${fontFamily}`
-      ctx.fillText(meta, x, metaY)
+      drawReadableText(meta, x, metaY)
 
       ctx.fillStyle = palette.text
       ctx.font = `700 ${titleSize}px ${fontFamily}`
       titleLines.forEach((line, index) => {
-        ctx.fillText(line, x, y + index * titleLineHeight)
+        drawReadableText(line, x, y + index * titleLineHeight)
       })
     } else {
       titleLines.forEach((line, index) => {
-        ctx.fillText(line, x, y + index * titleLineHeight)
+        drawReadableText(line, x, y + index * titleLineHeight)
       })
 
       ctx.fillStyle = palette.textMuted
       ctx.font = `500 ${metaSize}px ${fontFamily}`
-      ctx.fillText(meta, x, metaY)
+      drawReadableText(meta, x, metaY)
     }
 
     ctx.fillStyle = palette.text
@@ -1129,10 +1153,10 @@ function drawCanvas(canvas, template, palette, format, layers, selectedLayerId, 
     if (isBottomText) {
       const tagSize = Math.round(19 * scale)
       ctx.textAlign = 'right'
-      ctx.fillText(tag, frame.x + frame.width - pad, y + titleBlockHeight - tagSize)
+      drawReadableText(tag, frame.x + frame.width - pad, y + titleBlockHeight - tagSize)
     } else {
       ctx.textAlign = 'right'
-      ctx.fillText(tag, frame.x + frame.width - pad, y + 4)
+      drawReadableText(tag, frame.x + frame.width - pad, y + 4)
     }
     ctx.restore()
   }
