@@ -483,6 +483,7 @@ button {
 }
 
 .canvas-frame {
+  position: relative;
   display: grid;
   place-items: center;
   min-height: 0;
@@ -498,6 +499,12 @@ button {
   background-size: 22px 22px;
   background-position: 0 0, 0 11px, 11px -11px, -11px 0;
   overflow: hidden;
+}
+
+.canvas-menu-button,
+.mobile-inspector-header,
+.mobile-inspector-backdrop {
+  display: none;
 }
 
 canvas {
@@ -586,18 +593,88 @@ input[type="range"] {
   }
 
   .inspector {
-    grid-column: 1 / -1;
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 14px;
+    position: fixed;
+    top: 14px;
+    right: 14px;
+    bottom: 14px;
+    z-index: 40;
+    width: min(380px, calc(100vw - 28px));
+    padding: 10px;
+    overflow: auto;
+    border: 1px solid #d9dee2;
+    border-radius: 10px;
+    background: #eff2f4;
+    box-shadow: 0 24px 80px rgba(31, 36, 40, 0.22);
+    transform: translateX(calc(100% + 28px));
+    transition: transform 180ms ease;
+  }
+
+  .inspector.mobile-open {
+    transform: translateX(0);
   }
 
   .inspector-tabs {
-    grid-column: 1 / -1;
+    position: sticky;
+    top: 48px;
+    z-index: 2;
+    margin-bottom: 12px;
   }
 
-  .inspector > .panel {
-    min-width: 0;
+  .mobile-inspector-header {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 42px;
+    margin-bottom: 8px;
+    padding: 6px 4px 8px;
+    background: #eff2f4;
+  }
+
+  .mobile-inspector-header strong {
+    color: #1f2428;
+    font-size: 14px;
+  }
+
+  .mobile-inspector-header button,
+  .canvas-menu-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    border: 1px solid #cbd2d7;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.94);
+    color: #1f2428;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 800;
+  }
+
+  .mobile-inspector-header button {
+    width: 36px;
+    min-height: 36px;
+  }
+
+  .canvas-menu-button {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    z-index: 5;
+    min-height: 38px;
+    padding: 0 12px;
+    box-shadow: 0 10px 30px rgba(31, 36, 40, 0.16);
+  }
+
+  .mobile-inspector-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 35;
+    display: block;
+    background: rgba(31, 36, 40, 0.24);
+    cursor: pointer;
   }
 
   canvas {
@@ -623,9 +700,6 @@ input[type="range"] {
 
   .inspector {
     order: 3;
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
   }
 
   .brand {

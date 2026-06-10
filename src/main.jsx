@@ -9,9 +9,11 @@ import {
   Move,
   RefreshCcw,
   RotateCcw,
+  SlidersHorizontal,
   Sparkles,
   Trash2,
   Type,
+  X,
   Eye,
   EyeOff,
 } from 'lucide-react'
@@ -1055,6 +1057,7 @@ function App() {
     },
   })
   const [interaction, setInteraction] = useState(null)
+  const [mobileInspectorOpen, setMobileInspectorOpen] = useState(false)
   const canvasRef = useRef(null)
   const fileRef = useRef(null)
 
@@ -1421,6 +1424,15 @@ function App() {
           </button>
         </div>
         <div className="canvas-frame">
+          <button
+            className="canvas-menu-button"
+            type="button"
+            onClick={() => setMobileInspectorOpen(true)}
+            aria-label="設定を開く"
+          >
+            <SlidersHorizontal size={18} />
+            設定
+          </button>
           <canvas
             ref={canvasRef}
             className={interaction ? 'dragging' : ''}
@@ -1432,7 +1444,22 @@ function App() {
         </div>
       </section>
 
-      <aside className="inspector">
+      {mobileInspectorOpen && (
+        <button
+          className="mobile-inspector-backdrop"
+          type="button"
+          onClick={() => setMobileInspectorOpen(false)}
+          aria-label="設定を閉じる"
+        />
+      )}
+
+      <aside className={`inspector ${mobileInspectorOpen ? 'mobile-open' : ''}`}>
+        <div className="mobile-inspector-header">
+          <strong>設定</strong>
+          <button type="button" onClick={() => setMobileInspectorOpen(false)} aria-label="設定を閉じる">
+            <X size={18} />
+          </button>
+        </div>
         <div className="inspector-tabs" role="tablist" aria-label="右パネル">
           {[
             ['layers', 'レイヤー', Layers],
