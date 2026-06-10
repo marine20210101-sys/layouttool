@@ -2077,16 +2077,16 @@ function App() {
               </div>
               <label>
                 <span className="range-label">
-                  <span>薄さ</span>
-                  <b>{Math.round((settings.backgroundLightness ?? 0) * 100)}%</b>
+                  <span>濃さ</span>
+                  <b>{Math.round((1 - (settings.backgroundLightness ?? 0)) * 100)}%</b>
                 </span>
                 <input
                   type="range"
-                  min="0"
-                  max="0.85"
-                  step="0.01"
-                  value={settings.backgroundLightness ?? 0}
-                  onChange={(event) => updateBackgroundLightness(Number(event.target.value))}
+                  min="15"
+                  max="100"
+                  step="1"
+                  value={Math.round((1 - (settings.backgroundLightness ?? 0)) * 100)}
+                  onChange={(event) => updateBackgroundLightness(1 - Number(event.target.value) / 100)}
                 />
               </label>
             </section>
