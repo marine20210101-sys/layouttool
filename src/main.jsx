@@ -1861,7 +1861,7 @@ function App() {
           </>
         )}
       </aside>
-      <div className="app-credit">Created by まくまざわりんこ</div>
+      <div className="app-credit">Created by MacmazawaRinko</div>
     </main>
   )
 }
