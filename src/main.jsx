@@ -9,11 +9,9 @@ import {
   Move,
   RefreshCcw,
   RotateCcw,
-  SlidersHorizontal,
   Sparkles,
   Trash2,
   Type,
-  X,
   Eye,
   EyeOff,
 } from 'lucide-react'
@@ -1057,7 +1055,6 @@ function App() {
     },
   })
   const [interaction, setInteraction] = useState(null)
-  const [mobileInspectorOpen, setMobileInspectorOpen] = useState(false)
   const canvasRef = useRef(null)
   const fileRef = useRef(null)
 
@@ -1414,25 +1411,25 @@ function App() {
 
       <section className="stage-wrap">
         <div className="stage-toolbar">
+          <div className="mobile-stage-title">
+            <span className="mobile-brand-mark">
+              <Sparkles size={17} />
+            </span>
+            <span>
+              <strong>Works Layout Tool</strong>
+              <small>実績公開用レイアウト</small>
+            </span>
+          </div>
           <div>
             <strong>{template.name}</strong>
             <span>{format.name} / {format.width} x {format.height}px</span>
           </div>
           <button className="ghost-button" onClick={exportPng}>
             <Download size={18} />
-            PNG書き出し
+            <span className="export-label">PNG書き出し</span>
           </button>
         </div>
         <div className="canvas-frame">
-          <button
-            className="canvas-menu-button"
-            type="button"
-            onClick={() => setMobileInspectorOpen(true)}
-            aria-label="設定を開く"
-          >
-            <SlidersHorizontal size={18} />
-            設定
-          </button>
           <canvas
             ref={canvasRef}
             className={interaction ? 'dragging' : ''}
@@ -1444,31 +1441,17 @@ function App() {
         </div>
       </section>
 
-      {mobileInspectorOpen && (
-        <button
-          className="mobile-inspector-backdrop"
-          type="button"
-          onClick={() => setMobileInspectorOpen(false)}
-          aria-label="設定を閉じる"
-        />
-      )}
-
-      <aside className={`inspector ${mobileInspectorOpen ? 'mobile-open' : ''}`}>
-        <div className="mobile-inspector-header">
-          <strong>設定</strong>
-          <button type="button" onClick={() => setMobileInspectorOpen(false)} aria-label="設定を閉じる">
-            <X size={18} />
-          </button>
-        </div>
+      <aside className="inspector">
         <div className="inspector-tabs" role="tablist" aria-label="右パネル">
           {[
+            ['basic', '基本', ImagePlus],
             ['layers', 'レイヤー', Layers],
             ['text', '文字', Type],
             ['background', '背景', Sparkles],
           ].map(([tab, label, Icon]) => (
             <button
               key={tab}
-              className={activeInspectorTab === tab ? 'active' : ''}
+              className={`${activeInspectorTab === tab ? 'active' : ''} ${tab === 'basic' ? 'basic-inspector-tab' : ''}`}
               onClick={() => setActiveInspectorTab(tab)}
               type="button"
             >
@@ -1477,6 +1460,96 @@ function App() {
             </button>
           ))}
         </div>
+
+        {activeInspectorTab === 'basic' && (
+          <div className="basic-tab-content">
+            <section className="panel">
+              <div className="section-title">
+                <ImagePlus size={17} />
+                <span>画像</span>
+              </div>
+              <input
+                ref={fileRef}
+                className="hidden-input"
+                type="file"
+                accept="image/*"
+                multiple
+                onChange={(event) => handleFiles(event.target.files)}
+              />
+              <button className="primary-button" onClick={() => fileRef.current?.click()}>
+                <ImagePlus size={18} />
+                画像を追加
+              </button>
+              <div
+                className="drop-zone"
+                onDragOver={(event) => event.preventDefault()}
+                onDrop={(event) => {
+                  event.preventDefault()
+                  handleFiles(event.dataTransfer.files)
+                }}
+              >
+                複数画像をまとめてドロップできます
+              </div>
+            </section>
+
+            <section className="panel">
+              <div className="section-title">
+                <Move size={17} />
+                <span>サイズ</span>
+              </div>
+              <div className="template-list compact">
+                {formatPresets.map((item) => (
+                  <button
+                    key={item.id}
+                    className={`template-button ${item.id === formatId ? 'active' : ''}`}
+                    onClick={() => changeFormat(item.id)}
+                  >
+                    <span>{item.name}</span>
+                    <small>{item.width} x {item.height} / {item.description}</small>
+                  </button>
+                ))}
+              </div>
+            </section>
+
+            <section className="panel">
+              <div className="section-title">
+                <Sparkles size={17} />
+                <span>プリセット</span>
+              </div>
+              <div className="template-list">
+                {templates.map((item) => (
+                  <button
+                    key={item.id}
+                    className={`template-button ${item.id === templateId ? 'active' : ''}`}
+                    onClick={() => changeTemplate(item.id)}
+                  >
+                    <span>{item.name}</span>
+                    <small>{item.description}</small>
+                  </button>
+                ))}
+              </div>
+            </section>
+
+            <section className="panel">
+              <div className="section-title">
+                <Sparkles size={17} />
+                <span>カラー</span>
+              </div>
+              <div className="palette-list">
+                {template.palettes.map((item) => (
+                  <button
+                    key={item.id}
+                    className={`palette-button ${item.id === palette.id ? 'active' : ''}`}
+                    onClick={() => changePalette(item.id)}
+                  >
+                    <span className="swatch" style={{ background: template.solidPastel ? item.background : item.wave ?? item.background }} />
+                    <span>{item.name}</span>
+                  </button>
+                ))}
+              </div>
+            </section>
+          </div>
+        )}
 
         {activeInspectorTab === 'layers' && (
           <>
