@@ -837,20 +837,38 @@ function drawGridOverlay(ctx, width, height, grid) {
   ctx.restore()
 }
 
-function getHandles(layer) {
+function layerCenter(layer) {
+  return { x: layer.x + layer.width / 2, y: layer.y + layer.height / 2 }
+}
+
+function rotateLayerPoint(layer, point, direction = 1) {
+  const angle = (layer.rotation ?? 0) * Math.PI / 180 * direction
+  if (!angle) return point
+  const center = layerCenter(layer)
+  const x = point.x - center.x
+  const y = point.y - center.y
   return {
+    x: center.x + x * Math.cos(angle) - y * Math.sin(angle),
+    y: center.y + x * Math.sin(angle) + y * Math.cos(angle),
+  }
+}
+
+function getHandles(layer) {
+  const corners = {
     nw: { x: layer.x, y: layer.y },
     ne: { x: layer.x + layer.width, y: layer.y },
     se: { x: layer.x + layer.width, y: layer.y + layer.height },
     sw: { x: layer.x, y: layer.y + layer.height },
   }
+  return Object.fromEntries(handleNames.map((name) => [name, rotateLayerPoint(layer, corners[name])]))
 }
 
 function getDeleteControl(layer, format) {
   const size = Math.max(44, Math.min(72, format.width / 24))
   const radius = size / 2
   const x = layer.x + layer.width / 2
-  const preferredY = layer.y - radius - deleteControlPadding
+  const top = Math.min(...Object.values(getHandles(layer)).map((point) => point.y))
+  const preferredY = top - radius - deleteControlPadding
   const y = Math.max(radius + 6, preferredY)
   return { x, y, radius, size }
 }
@@ -860,15 +878,28 @@ function hitDeleteControl(layer, format, point) {
   return Math.hypot(point.x - control.x, point.y - control.y) <= control.radius
 }
 
-function getHandleAt(layer, point, size) {
-  const handles = getHandles(layer)
-  return handleNames.find((name) => {
-    const handle = handles[name]
-    return Math.abs(point.x - handle.x) <= size && Math.abs(point.y - handle.y) <= size
-  })
+function getHandleSize(format) {
+  return Math.max(14, format.width / 100)
+}
+
+function getHandleAt(layer, format, point) {
+  const size = format.width / 55
+  let closest = null
+  let distance = Infinity
+  for (const [name, handle] of Object.entries(getHandles(layer))) {
+    const dx = Math.abs(point.x - handle.x)
+    const dy = Math.abs(point.y - handle.y)
+    const nextDistance = Math.hypot(dx, dy)
+    if (dx <= size && dy <= size && nextDistance < distance) {
+      closest = name
+      distance = nextDistance
+    }
+  }
+  return closest
 }
 
 function hitLayer(layer, point) {
+  point = rotateLayerPoint(layer, point, -1)
   return (
     point.x >= layer.x &&
     point.x <= layer.x + layer.width &&
@@ -918,6 +949,7 @@ function fitLayerToSlot(img, format, name) {
 }
 
 function resizeLayer(layer, handle, point, keepRatio = true) {
+  point = rotateLayerPoint(layer, point, -1)
   const ratio = layer.width / layer.height
   let left = layer.x
   let top = layer.y
@@ -941,13 +973,10 @@ function resizeLayer(layer, handle, point, keepRatio = true) {
     else bottom = top + height
   }
 
-  return {
-    ...layer,
-    x: left,
-    y: top,
-    width: right - left,
-    height: bottom - top,
-  }
+  const width = right - left
+  const height = bottom - top
+  const center = rotateLayerPoint(layer, { x: left + width / 2, y: top + height / 2 })
+  return { ...layer, x: center.x - width / 2, y: center.y - height / 2, width, height }
 }
 
 function createCanvas(width, height) {
@@ -995,6 +1024,12 @@ function drawLayer(ctx, layer) {
   const offset = Math.max(0, Number(effects.stickerOffset) || 0)
 
   ctx.save()
+  if (layer.rotation) {
+    const center = layerCenter(layer)
+    ctx.translate(center.x, center.y)
+    ctx.rotate(layer.rotation * Math.PI / 180)
+    ctx.translate(-center.x, -center.y)
+  }
   ctx.globalAlpha = layer.opacity ?? 1
 
   if (offset > 0 || effects.borderEnabled || effects.shadowEnabled) {
@@ -1183,17 +1218,13 @@ function drawCanvas(canvas, template, palette, format, layers, selectedLayerId, 
     ctx.strokeStyle = '#2f80ed'
     ctx.lineWidth = 4
     ctx.setLineDash([14, 10])
-    ctx.strokeRect(selectedLayer.x, selectedLayer.y, selectedLayer.width, selectedLayer.height)
-    ctx.setLineDash([])
-    const handleSize = Math.max(14, width / 100)
     const handles = getHandles(selectedLayer)
-    Object.values(handles).forEach((handle) => {
-      ctx.fillStyle = '#ffffff'
-      ctx.strokeStyle = '#2f80ed'
-      ctx.lineWidth = 4
-      ctx.fillRect(handle.x - handleSize / 2, handle.y - handleSize / 2, handleSize, handleSize)
-      ctx.strokeRect(handle.x - handleSize / 2, handle.y - handleSize / 2, handleSize, handleSize)
-    })
+    ctx.beginPath()
+    ctx.moveTo(handles.nw.x, handles.nw.y)
+    handleNames.slice(1).forEach((name) => ctx.lineTo(handles[name].x, handles[name].y))
+    ctx.closePath()
+    ctx.stroke()
+    ctx.setLineDash([])
     const deleteControl = getDeleteControl(selectedLayer, { width, height })
     const iconSize = deleteControl.radius * 0.5
     ctx.fillStyle = '#1f2428'
@@ -1243,6 +1274,7 @@ function App() {
   })
   const [interaction, setInteraction] = useState(null)
   const canvasRef = useRef(null)
+  const [canvasBounds, setCanvasBounds] = useState(null)
   const fileRef = useRef(null)
   const activePointersRef = useRef(new Map())
   const historyDraftRef = useRef(new Set())
@@ -1261,6 +1293,26 @@ function App() {
   )
 
   const selectedLayer = layersState.find((layer) => layer.id === selectedLayerId) ?? null
+  const handleSize = getHandleSize(format)
+
+  useEffect(() => {
+    const canvas = canvasRef.current
+    const frame = canvas.parentElement
+    const measure = () => {
+      const rect = canvas.getBoundingClientRect()
+      const frameRect = frame.getBoundingClientRect()
+      setCanvasBounds({
+        left: rect.left - frameRect.left - frame.clientLeft,
+        top: rect.top - frameRect.top - frame.clientTop,
+        width: rect.width,
+        height: rect.height,
+      })
+    }
+    const observer = new ResizeObserver(measure)
+    observer.observe(canvas)
+    observer.observe(frame)
+    return () => observer.disconnect()
+  }, [])
 
   function cloneLayers(layers) {
     return layers.map((layer) => ({
@@ -1556,12 +1608,12 @@ function App() {
     }
   }
 
-  function onPointerDown(event) {
+  function onPointerDown(event, resizeHandle) {
     event.preventDefault()
     const point = pointerPosition(event)
     activePointersRef.current.set(event.pointerId, point)
     const currentSelected = layersState.find((layer) => layer.id === selectedLayerId)
-    if (currentSelected && hitDeleteControl(currentSelected, format, point)) {
+    if (!resizeHandle && currentSelected && hitDeleteControl(currentSelected, format, point)) {
       deleteSelectedLayer()
       activePointersRef.current.delete(event.pointerId)
       return
@@ -1585,12 +1637,18 @@ function App() {
       return
     }
 
-    const handleSize = format.width / 55
     if (currentSelected) {
-      const handle = getHandleAt(currentSelected, point, handleSize)
+      const handle = resizeHandle ?? getHandleAt(currentSelected, format, point)
       if (handle) {
         pushHistory()
-        setInteraction({ type: 'resize', layerId: currentSelected.id, handle, startLayer: currentSelected })
+        const corner = getHandles(currentSelected)[handle]
+        setInteraction({
+          type: 'resize',
+          layerId: currentSelected.id,
+          handle,
+          startLayer: currentSelected,
+          offset: { x: corner.x - point.x, y: corner.y - point.y },
+        })
         event.currentTarget.setPointerCapture(event.pointerId)
         return
       }
@@ -1640,10 +1698,11 @@ function App() {
     }
 
     if (interaction.type === 'resize') {
+      const corner = { x: point.x + interaction.offset.x, y: point.y + interaction.offset.y }
       setLayersState((current) =>
         current.map((layer) =>
           layer.id === interaction.layerId
-            ? resizeLayer(interaction.startLayer, interaction.handle, point, !event.shiftKey)
+            ? resizeLayer(interaction.startLayer, interaction.handle, corner, !event.shiftKey)
             : layer,
         ),
       )
@@ -1796,6 +1855,32 @@ function App() {
             onPointerCancel={onPointerUp}
             onContextMenu={(event) => event.preventDefault()}
           />
+          {selectedLayer && canvasBounds && (
+            <svg
+              className="resize-overlay"
+              style={canvasBounds}
+              viewBox={`0 0 ${format.width} ${format.height}`}
+              preserveAspectRatio="none"
+              aria-hidden="true"
+              onPointerMove={onPointerMove}
+              onPointerUp={onPointerUp}
+              onPointerCancel={onPointerUp}
+            >
+              {Object.entries(getHandles(selectedLayer)).map(([name, { x, y }]) => (
+                <rect
+                  key={name}
+                  x={x - handleSize / 2}
+                  y={y - handleSize / 2}
+                  width={handleSize}
+                  height={handleSize}
+                  fill="#fff"
+                  stroke="#2f80ed"
+                  strokeWidth="4"
+                  onPointerDown={(event) => onPointerDown(event, name)}
+                />
+              ))}
+            </svg>
+          )}
         </div>
       </section>
 
@@ -1960,6 +2045,19 @@ function App() {
               </div>
               {selectedLayer ? (
                 <>
+                  <label>
+                    <span className="range-label">
+                      <span>回転</span>
+                      <b>{selectedLayer.rotation ?? 0}°</b>
+                    </span>
+                    <input
+                      type="range"
+                      min="-180"
+                      max="180"
+                      value={selectedLayer.rotation ?? 0}
+                      onChange={(event) => updateSelectedLayer({ rotation: Number(event.target.value) })}
+                    />
+                  </label>
                   <label>
                     背景色
                     <div className="color-row">
