@@ -432,7 +432,8 @@ function adjustBackgroundColor(color, lightness, saturation) {
   let nextChroma = 0
   if (chroma > 0) {
     const originalSaturation = chroma / (1 - Math.abs(2 * originalLightness - 1))
-    nextChroma = adjust(originalSaturation, saturation) * nextRange
+    const saturationBoost = saturation > 0 ? 1 - (1 - saturation) ** 3 : saturation
+    nextChroma = adjust(originalSaturation, saturationBoost) * nextRange
   }
   const rgb = channels.map((value) => {
     const huePosition = chroma ? (value - min) / chroma : 0.5
