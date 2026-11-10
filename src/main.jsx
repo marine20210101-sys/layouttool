@@ -417,13 +417,28 @@ function parseColorParts(color) {
   return { r, g, b, a }
 }
 
-function lightenColor(color, amount = 0) {
-  const safeAmount = Math.max(0, Math.min(1, Number(amount) || 0))
-  if (safeAmount <= 0) return color
+function adjustBackgroundColor(color, lightness, saturation) {
+  if (!lightness && !saturation) return color
   const parts = parseColorParts(color)
   if (!parts) return color
-  const mix = (value) => Math.round(value + (255 - value) * safeAmount)
-  return `rgba(${mix(parts.r)}, ${mix(parts.g)}, ${mix(parts.b)}, ${parts.a})`
+  const channels = [parts.r, parts.g, parts.b].map((value) => value / 255)
+  const min = Math.min(...channels)
+  const max = Math.max(...channels)
+  const chroma = max - min
+  const originalLightness = (max + min) / 2
+  const adjust = (value, amount) => value + amount * (amount < 0 ? value : 1 - value)
+  const nextLightness = adjust(originalLightness, lightness)
+  const nextRange = 1 - Math.abs(2 * nextLightness - 1)
+  let nextChroma = 0
+  if (chroma > 0) {
+    const originalSaturation = chroma / (1 - Math.abs(2 * originalLightness - 1))
+    nextChroma = adjust(originalSaturation, saturation) * nextRange
+  }
+  const rgb = channels.map((value) => {
+    const huePosition = chroma ? (value - min) / chroma : 0.5
+    return Math.round((nextLightness + (huePosition - 0.5) * nextChroma) * 255)
+  })
+  return `rgba(${rgb.join(', ')}, ${parts.a})`
 }
 
 function colorToHexInput(color, fallback = '#ffffff') {
@@ -441,13 +456,14 @@ function darkenColor(color, amount = 0.25, alpha = 1) {
   return `rgba(${mix(parts.r)}, ${mix(parts.g)}, ${mix(parts.b)}, ${alpha})`
 }
 
-function getLightenedPalette(palette, amount = 0) {
+function getAdjustedPalette(palette, { backgroundLightness, backgroundSaturation }) {
+  const adjust = (color) => adjustBackgroundColor(color, backgroundLightness, backgroundSaturation)
   return {
     ...palette,
-    background: lightenColor(palette.background, amount),
-    gradientFrom: lightenColor(palette.gradientFrom, amount),
-    gradientTo: lightenColor(palette.gradientTo, amount),
-    wave: lightenColor(palette.wave, amount),
+    background: adjust(palette.background),
+    gradientFrom: adjust(palette.gradientFrom),
+    gradientTo: adjust(palette.gradientTo),
+    wave: adjust(palette.wave),
   }
 }
 
@@ -1008,7 +1024,7 @@ function drawLayer(ctx, layer) {
 function drawCanvas(canvas, template, palette, format, layers, selectedLayerId, settings, showControls = true) {
   const ctx = canvas.getContext('2d')
   const { width, height } = getCanvasSize(format)
-  const displayPalette = getLightenedPalette(palette, settings.backgroundLightness)
+  const displayPalette = getAdjustedPalette(palette, settings)
   canvas.width = width
   canvas.height = height
 
@@ -1221,6 +1237,7 @@ function App() {
     textPosition: 'top',
     layersAboveFrame: false,
     backgroundLightness: 0,
+    backgroundSaturation: 0,
     grid: getDefaultGrid(templates[0], templates[0].palettes[0]),
     decoration: getDefaultDecoration(templates[0]),
   })
@@ -1367,9 +1384,9 @@ function App() {
     setSettings((current) => ({ ...current, grid: { ...current.grid, ...patch } }))
   }
 
-  function updateBackgroundLightness(value) {
+  function updateBackgroundColor(key, value) {
     pushHistory()
-    setSettings((current) => ({ ...current, backgroundLightness: value }))
+    setSettings((current) => ({ ...current, [key]: value }))
   }
 
   function updateLayersAboveFrame(value) {
@@ -1409,6 +1426,7 @@ function App() {
     setSettings((current) => ({
       ...current,
       backgroundLightness: 0,
+      backgroundSaturation: 0,
       grid: getDefaultGrid(nextTemplate, nextPalette),
       decoration: getDefaultDecoration(nextTemplate),
     }))
@@ -2140,20 +2158,27 @@ function App() {
                 <Sparkles size={17} />
                 <span>背景色</span>
               </div>
-              <label>
-                <span className="range-label">
-                  <span>濃さ</span>
-                  <b>{Math.round((1 - (settings.backgroundLightness ?? 0)) * 100)}%</b>
-                </span>
-                <input
-                  type="range"
-                  min="15"
-                  max="100"
-                  step="1"
-                  value={Math.round((1 - (settings.backgroundLightness ?? 0)) * 100)}
-                  onChange={(event) => updateBackgroundLightness(1 - Number(event.target.value) / 100)}
-                />
-              </label>
+              {[
+                ['backgroundLightness', '明度'],
+                ['backgroundSaturation', '彩度'],
+              ].map(([key, label]) => {
+                const value = Math.round(settings[key] * 100)
+                return (
+                  <label key={key}>
+                    <span className="range-label">
+                      <span>{label}</span>
+                      <b>{value > 0 ? '+' : ''}{value}%</b>
+                    </span>
+                    <input
+                      type="range"
+                      min="-100"
+                      max="100"
+                      value={value}
+                      onChange={(event) => updateBackgroundColor(key, Number(event.target.value) / 100)}
+                    />
+                  </label>
+                )
+              })}
             </section>
 
             <section className="panel">
